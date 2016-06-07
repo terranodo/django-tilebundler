@@ -14,7 +14,7 @@ BASE_DIR = os.path.dirname(os.path.dirname(__file__))
 
 
 TILEBUNDLER_CONFIG = {
-    'tileset_dir': '/Users/s30244/dev/mbtiles'
+    'tileset_dir': '/cache/tilebundler'
 }
 
 # Quick-start development settings - unsuitable for production

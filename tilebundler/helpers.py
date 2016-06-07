@@ -3,9 +3,10 @@ from mapproxy.seed.seeder import seed
 from mapproxy.seed.config import SeedingConfiguration, SeedConfigurationError, ConfigurationError
 from mapproxy.seed.spec import validate_seed_conf
 from mapproxy.config.loader import ProxyConfiguration
-from mapproxy.config.spec import validate_mapproxy_conf
+#from mapproxy.config.spec import validate_mapproxy_conf
 from mapproxy.seed import seeder
 from mapproxy.seed import util
+from django.utils.text import slugify
 
 from datetime import datetime
 import base64
@@ -42,14 +43,15 @@ def generate_confs(tileset, ignore_warnings=True, renderd=False):
       "caches":{
         "tileset_cache":{
           "grids":[
-            "webmercator"
+            "EPSG3857"
           ],
           "sources":[
             "tileset_source"
           ],
           "cache":{
-            "type":"mbtiles",
-            "filename": "/provide/valid/path/to/file.mbtiles"
+            "type":"geopackage",
+            "filename": "/provide/valid/path/to/file.gpkg",
+            "table_name": "something"
           }
         }
       },
@@ -58,8 +60,9 @@ def generate_confs(tileset, ignore_warnings=True, renderd=False):
         }
       },
       "grids":{
-        "webmercator":{
-          "base":"GLOBAL_MERCATOR"
+        "EPSG3857": {
+          "origin": "nw",
+           "srs": "EPSG:3857"
         }
       },
       "globals": {
@@ -101,7 +104,7 @@ def generate_confs(tileset, ignore_warnings=True, renderd=False):
     seed_conf = yaml.safe_load(seed_conf_json)
     mapproxy_conf = yaml.safe_load(mapproxy_conf_json)
 
-    print '---- mbtiles file to generate: {}'.format(get_tileset_filename(tileset.name))
+    print '---- gpkg file to generate: {}'.format(get_tileset_filename(tileset.name))
 
     mapproxy_conf['sources']['tileset_source']['type'] = u_to_str(tileset.server_service_type)
 
@@ -124,12 +127,13 @@ def generate_confs(tileset, ignore_warnings=True, renderd=False):
     mapproxy_conf['layers'][0]['name'] = u_to_str(tileset.layer_name)
     mapproxy_conf['layers'][0]['title'] = u_to_str(tileset.layer_name)
     mapproxy_conf['caches']['tileset_cache']['cache']['filename'] = get_tileset_filename(tileset.name, 'generating')
+    mapproxy_conf['caches']['tileset_cache']['cache']['table_name'] = str(slugify(tileset.name).replace('-', '_'))
 
     if tileset.layer_zoom_start > tileset.layer_zoom_stop:
         raise ConfigurationError('invalid configuration - zoom start is greater than zoom stop')
     seed_conf['seeds']['tileset_seed']['levels']['from'] = tileset.layer_zoom_start
     seed_conf['seeds']['tileset_seed']['levels']['to'] = tileset.layer_zoom_stop
-    # any specified refresh before for mbtiles will result in regeneration of the tile set
+    # any specified refresh before for gpkg will result in regeneration of the tile set
     seed_conf['seeds']['tileset_seed']['refresh_before']['minutes'] = 0
 
     if tileset.geom:
@@ -184,12 +188,15 @@ def generate_confs(tileset, ignore_warnings=True, renderd=False):
         mapproxy_conf['sources']['tileset_source']['http'] = {}
         mapproxy_conf['sources']['tileset_source']['http']['headers'] = {}
         mapproxy_conf['sources']['tileset_source']['http']['headers']['Authorization'] = 'Basic {}'.format(encoded)
+        mapproxy_conf['sources']['tileset_source']['http']['ssl_no_cert_checks'] = True
 
+    """
     errors, informal_only = validate_mapproxy_conf(mapproxy_conf)
     for error in errors:
         print error
     if not informal_only or (errors and not ignore_warnings):
         raise ConfigurationError('invalid configuration - {}'.format(', '.join(errors)))
+    """
     cf = ProxyConfiguration(mapproxy_conf, conf_base_dir=get_tileset_dir(), seed=seed, renderd=renderd)
 
     errors, informal_only = validate_seed_conf(seed_conf)
@@ -205,7 +212,7 @@ def generate_confs(tileset, ignore_warnings=True, renderd=False):
 """
 example settings file
 TILEBUNDLER_CONFIG = {
-    'tileset_dir': '/var/lib/mbtiles'
+    'tileset_dir': '/var/lib/gpkg'
 }
 """
 def get_tileset_dir():
@@ -213,7 +220,7 @@ def get_tileset_dir():
     return conf.get('tileset_dir', './')
 
 
-def get_tileset_filename(tileset_name, extension='mbtiles'):
+def get_tileset_filename(tileset_name, extension='gpkg'):
     return '{}/{}.{}'.format(get_tileset_dir(), tileset_name, extension)
 
 
@@ -239,7 +246,7 @@ def is_int_str(v):
     return v == '0' or (v if v.find('..') > -1 else v.lstrip('-+').rstrip('0').rstrip('.')).isdigit()
 
 
-def add_tileset_file_attribs(target_object, tileset, extension='mbtiles'):
+def add_tileset_file_attribs(target_object, tileset, extension='gpkg'):
     tileset_filename = get_tileset_filename(tileset.name, extension)
     if os.path.isfile(tileset_filename):
         stat = os.stat(tileset_filename)
@@ -259,7 +266,7 @@ def get_status(tileset):
     }
 
     # generate status for already existing tileset
-    # if there is a .mbtiles file on disk, get the size and time last updated
+    # if there is a .gpkg file on disk, get the size and time last updated
     tileset_filename = get_tileset_filename(tileset.name)
     if os.path.isfile(tileset_filename):
         res['current']['status'] = 'ready'
@@ -346,7 +353,7 @@ def seed_process_spawn(tileset):
     if os.path.isfile(get_tileset_filename(tileset.name, 'progress_log')):
         os.rename(get_tileset_filename(tileset.name, 'progress_log'), '{}_{}'.format(get_tileset_filename(tileset.name, 'generating'), backup_millis))
 
-    # generate the new mbtiles as name.generating file
+    # generate the new gpkg as name.generating file
     progress_log_filename = get_tileset_filename(tileset.name, 'progress_log')
     out = open(progress_log_filename, 'w+')
     progress_logger = util.ProgressLog(out=out, verbose=True, silent=False)
@@ -366,7 +373,7 @@ def seed_process_target(tileset_id, tileset_name, tasks, progress_logger):
     print '----[ start seeding. tileset {}'.format(tileset_id)
     seeder.seed(tasks=tasks, progress_logger=progress_logger)
 
-    # now that we have generated the new mbtiles file, backup the last one, then rename
+    # now that we have generated the new gpkg file, backup the last one, then rename
     # the _generating one to the main name
     if os.path.isfile(get_tileset_filename(tileset_name)):
         millis = int(round(time.time() * 1000))
